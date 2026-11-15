@@ -1,0 +1,4 @@
+.vercel
+.env*
+services/frontend/node_modules
+services/backend/node_modules
