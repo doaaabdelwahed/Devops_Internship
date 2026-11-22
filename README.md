@@ -1,61 +1,23 @@
-# NestJS + Angular Microservices (Docker)
+Week1 # NestJS + Angular Microservices (Docker)
 
-This repository contains two independently built and deployed services:
+Two independently built and deployed services, orchestrated with Docker Compose:
 
-- **`services/backend`**: A NestJS HTTP API exposing `GET /health` and `GET /info`.
-- **`services/frontend`**: An Angular application served by Nginx. Nginx also exposes `GET /health` and `GET /info` and acts as a reverse proxy, forwarding requests under `/api/` to the backend.
+- **Backend** (`services/backend`): NestJS 11 API on port `3000`, exposing `/health` and `/info`.
+- **Frontend** (`services/frontend`): Angular 20 app served by Nginx on port `4200`. Nginx also has its own `/health` and `/info` and reverse-proxies `/api/*` to the backend.
 
-Each service has its own Docker image and container. Both services can be built and run independently and communicate over a shared Docker network.
-
-Both Docker images use lightweight Alpine-based images and run as a non-root user with UID `1001`.
-
-The frontend uses Nginx for its HTTP endpoints and Angular static files; it does not require a separate Node.js HTTP server.
+Both images use multi-stage Alpine builds, run as a **non-root user (UID `1001`)**, and include a Docker `HEALTHCHECK`.
 
 ## Architecture
 
 ```text
-                    Browser / Client
-                           |
-                           |
-                     localhost:4200
-                           |
-                           v
-                 +--------------------+
-                 |  Frontend Service  |
-                 |   Nginx + Angular  |
-                 |                    |
-                 | GET /health        |
-                 | GET /info          |
-                 | GET /              |
-                 | GET /api/*         |
-                 +--------------------+
-                           |
-                           | /api/*
-                           | Reverse Proxy
-                           v
-                 +--------------------+
-                 |   Backend Service  |
-                 |       NestJS       |
-                 |                    |
-                 | GET /health        |
-                 | GET /info          |
-                 +--------------------+
-                           |
-                           |
-                     localhost:3000
+Browser ──► localhost:4200 ──► angular-frontend (Nginx :8080)
+                                  ├─ /          → Angular app
+                                  ├─ /health    → Nginx JSON
+                                  ├─ /info      → Nginx JSON
+                                  └─ /api/*  ──► nestjs-backend (NestJS :3000)
 ```
 
-### Request routing
-
-| Request | Destination | Purpose |
-|---|---|---|
-| `/` | Angular static files served by Nginx | Display the frontend UI |
-| `/health` | Nginx | Check frontend service health |
-| `/info` | Nginx | Retrieve frontend service information |
-| `/api/health` | NestJS backend | Access the backend health endpoint through Nginx |
-| `/api/info` | NestJS backend | Access the backend info endpoint through Nginx |
-
-The Nginx configuration uses:
+Nginx strips the `/api/` prefix before forwarding (`/api/health` → `http://backend:3000/health`):
 
 ```nginx
 location /api/ {
@@ -63,542 +25,154 @@ location /api/ {
 }
 ```
 
-The trailing slash in `proxy_pass` means Nginx removes the `/api/` prefix before forwarding the request.
+The containers share the `app-network` bridge network and reach each other by service name (`backend`), not `localhost`.
 
-For example:
-
-- `/api/health` is forwarded to `http://backend:3000/health`.
-- `/api/info` is forwarded to `http://backend:3000/info`.
-
-The frontend and backend communicate using the Docker network and the backend service/container name.
-
-## Prerequisites
-
-- Docker Engine or Docker Desktop.
-- Docker Compose v2.
-- Internet access during the first image build so npm can download dependencies.
-
-## 1. Build the backend image
-
-From the repository root:
-
-```bash
-docker build -t microservices-backend:1.0 ./services/backend
-```
-
-## 2. Build the frontend image
-
-```bash
-docker build -t microservices-frontend:1.0 ./services/frontend
-```
-
-## 3. Run the services using Docker Compose (Recommended)
-
-The repository root contains `compose.yaml`.
-
-Build the images and start both services:
-
-```bash
-docker compose up -d --build
-```
-
-Check the running containers:
-
-```bash
-docker compose ps
-```
-
-View the logs:
-
-```bash
-docker compose logs -f
-```
-
-View logs for a specific service:
-
-```bash
-docker compose logs -f backend
-docker compose logs -f frontend
-```
-
-Stop the services:
-
-```bash
-docker compose down
-```
-
-Rebuild and restart after changing the Dockerfiles or application code:
-
-```bash
-docker compose up -d --build
-```
-
-To rebuild only the frontend:
-
-```bash
-docker compose up -d --build frontend
-```
-
-### Expected port mappings
-
-The examples assume the following configuration in `compose.yaml`:
-
-```yaml
-services:
-  backend:
-    build:
-      context: ./services/backend
-    container_name: backend
-    ports:
-      - "3000:3000"
-    networks:
-      - microservices-net
-
-  frontend:
-    build:
-      context: ./services/frontend
-    container_name: frontend
-    ports:
-      - "4200:8080"
-    networks:
-      - microservices-net
-
-networks:
-  microservices-net:
-    driver: bridge
-```
-
-Keep any existing environment variables, database services, volumes, and other backend configuration required by your application.
-
-The important settings are:
-
-- Backend listens on port `3000`.
-- Nginx listens on port `8080` inside the frontend container.
-- Frontend port mapping is `4200:8080`.
-- Both services share the `microservices-net` network.
-- Nginx resolves `backend` through Docker's internal DNS.
-
-**Note:** Docker Compose creates the declared network automatically. You do not need to run `docker network create` when using this Compose configuration.
-
-## 4. Run the services independently using Docker
-
-You can also build and run each service manually without Docker Compose.
-
-### Create the network
-
-```bash
-docker network create microservices-net
-```
-
-If the network already exists, reuse it.
-
-### Run the backend
-
-```bash
-docker run -d \
-  --name backend \
-  --network microservices-net \
-  -p 3000:3000 \
-  microservices-backend:1.0
-```
-
-### Run the frontend
-
-Start the backend first because Nginx forwards `/api/` requests to the backend container.
-
-```bash
-docker run -d \
-  --name frontend \
-  --network microservices-net \
-  -p 4200:8080 \
-  microservices-frontend:1.0
-```
-
-The frontend can now serve Angular and expose its own HTTP endpoints independently of the backend. Requests to `/api/` require the backend to be reachable.
-
-To stop and remove the containers:
-
-```bash
-docker rm -f frontend backend
-```
-
-Remove the network when it is no longer needed:
-
-```bash
-docker network rm microservices-net
-```
-
-**Important:** Do not run the manual containers and the Compose containers with the same container names simultaneously. Choose one approach at a time.
-
-## 5. Verify the health endpoints
-
-The endpoints can be tested using `curl`.
-
-### Backend health
-
-```bash
-curl http://localhost:3000/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "ok",
-  "service": "backend",
-  "timestamp": "<current timestamp>"
-}
-```
-
-The timestamp is generated by the backend at request time.
-
-### Backend information
-
-```bash
-curl http://localhost:3000/info
-```
-
-The response contains information about the backend service, as implemented by the NestJS application.
-
-### Frontend health
-
-```bash
-curl http://localhost:4200/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "ok",
-  "service": "frontend"
-}
-```
-
-### Frontend information
-
-```bash
-curl http://localhost:4200/info
-```
-
-Expected response:
-
-```json
-{
-  "service": "frontend",
-  "framework": "Angular",
-  "server": "Nginx"
-}
-```
-
-The exact response bodies must match the implementation in the backend and Nginx configuration.
-
-## 6. Verify the Angular application
-
-Open the frontend in your browser:
+## Project Structure
 
 ```text
-http://localhost:4200
+.
+├── compose.yaml
+└── services/
+    ├── backend/      # NestJS API + Dockerfile
+    └── frontend/     # Angular app + nginx.conf + Dockerfile
 ```
 
-Angular should be served by Nginx.
-
-The frontend should call backend APIs using relative URLs under `/api/`, rather than hardcoding the backend host and port into browser requests.
-
-For example:
-
-```text
-/api/health
-/api/info
-```
-
-This allows Nginx to forward the requests to the backend over the internal Docker network.
-
-### Test the reverse proxy
-
-Backend health through Nginx:
+## Run with Docker Compose
 
 ```bash
-curl http://localhost:4200/api/health
+docker compose up -d --build   # build and start
+docker compose ps              # check status (wait for "healthy")
+docker compose logs -f         # follow logs
+docker compose down            # stop and remove
 ```
 
-Backend information through Nginx:
+Open **http://localhost:4200**.
+
+Rebuild one service after changes: `docker compose up -d --build backend` (or `frontend`).
+
+<details>
+<summary>Run without Compose</summary>
 
 ```bash
-curl http://localhost:4200/api/info
+docker build -t backend-image  ./services/backend
+docker build -t frontend-image ./services/frontend
+
+docker network create app-network
+docker run -d --name nestjs-backend   --network app-network --network-alias backend -p 3000:3000 backend-image
+docker run -d --name angular-frontend --network app-network -p 4200:8080 frontend-image
 ```
 
-These requests should return the backend responses, not the frontend responses.
+`--network-alias backend` is required because Nginx proxies to `http://backend:3000`.
+</details>
 
-## 7. Verify non-root execution
-
-Both images are intended to run as UID `1001`.
-
-Check the configured user for the backend container:
+<details>
+<summary>Local development (without Docker)</summary>
 
 ```bash
-docker inspect --format='{{.Config.User}}' backend
+cd services/backend  && npm install && npm run start:dev   # http://localhost:3000
+cd services/frontend && npm install && npm start           # http://localhost:4200
 ```
 
-Check the configured user for the frontend container:
+`proxy.conf.json` forwards `/api/*` to the backend during `ng serve`.
+</details>
 
-```bash
-docker inspect --format='{{.Config.User}}' frontend
-```
+## Endpoints
 
-Expected output for both:
-
-```text
-1001
-```
-
-When using Docker Compose, use the same commands with the actual container names configured in `compose.yaml`.
-
-If the output is empty or different, inspect the corresponding Dockerfile and the `USER` instruction.
-
-## 8. Useful Docker commands
-
-List running containers:
-
-```bash
-docker ps
-```
-
-List all containers, including stopped containers:
-
-```bash
-docker ps -a
-```
-
-View backend logs:
-
-```bash
-docker logs backend
-```
-
-View frontend logs:
-
-```bash
-docker logs frontend
-```
-
-Inspect the frontend container:
-
-```bash
-docker inspect frontend
-```
-
-Check the frontend health-check status:
-
-```bash
-docker inspect --format='{{json .State.Health}}' frontend
-```
-
-This health-check command requires a `HEALTHCHECK` instruction in the frontend Dockerfile.
-
-Inspect Docker networks:
-
-```bash
-docker network ls
-docker network inspect microservices-net
-```
-
-## 9. Troubleshooting
-
-### Port already in use
-
-If port `4200` is already occupied, change the host-side port mapping.
-
-For example:
-
-```yaml
-ports:
-  - "4201:8080"
-```
-
-The frontend will then be available at:
-
-```text
-http://localhost:4201
-```
-
-The internal Nginx port remains `8080`.
-
-### Frontend cannot reach backend
-
-Check that:
-
-- Both containers are attached to the same Docker network.
-- The backend is running and listening on port `3000`.
-- The Nginx configuration uses `proxy_pass http://backend:3000/;`.
-- The backend container/service is resolvable by the name `backend`.
-- The backend's `/health` endpoint responds successfully.
-
-Remember that `localhost` inside a container refers to that same container, not another container. Use the backend service name to communicate between containers.
-
-### Frontend returns a connection error
-
-Check the port mapping:
-
-```yaml
-ports:
-  - "4200:8080"
-```
-
-The left-hand side is the host port; the right-hand side is the port inside the container.
-
-Then rebuild and recreate the frontend:
-
-```bash
-docker compose up -d --build frontend
-```
-
-Check the logs:
-
-```bash
-docker compose logs --tail=100 frontend
-```
-
-### Nginx fails to start
-
-Check the Nginx configuration and its logs:
-
-```bash
-docker compose logs frontend
-```
-
-If needed, validate the configuration inside a running container:
-
-```bash
-docker exec frontend nginx -t
-```
-
-This validation command requires the container to be running.
-
-Common causes include:
-
-- Invalid Nginx syntax.
-- A `server` block placed outside the `http` block in the main Nginx configuration.
-- Missing configuration files.
-- Permission problems when running as a non-root user.
-- An incorrect listening port.
-
-### Rebuild after changes
-
-Rebuild and restart both services:
-
-```bash
-docker compose up -d --build
-```
-
-Rebuild only the backend:
-
-```bash
-docker compose up -d --build backend
-```
-
-Rebuild only the frontend:
-
-```bash
-docker compose up -d --build frontend
-```
-
-If you change the Nginx configuration or Dockerfile, rebuild the frontend image and recreate its container so the changes take effect.
-
-## Endpoints Summary
-
-| Service | URL | Purpose |
+| URL | Served by | Response |
 |---|---|---|
-| Backend | `http://localhost:3000/health` | Backend health JSON |
-| Backend | `http://localhost:3000/info` | Backend service information |
-| Frontend | `http://localhost:4200/health` | Frontend health JSON |
-| Frontend | `http://localhost:4200/info` | Frontend service information |
-| Frontend UI | `http://localhost:4200` | Angular application |
-| Frontend proxy | `http://localhost:4200/api/health` | Backend health through Nginx |
-| Frontend proxy | `http://localhost:4200/api/info` | Backend information through Nginx |
+| http://localhost:4200 | Nginx | Angular status dashboard |
+| http://localhost:4200/health | Nginx | `{"status":"ok","service":"frontend","framework":"Angular"}` |
+| http://localhost:4200/info | Nginx | `{"service":"frontend","framework":"Angular","version":"1.0.0"}` |
+| http://localhost:4200/api/health | NestJS via proxy | Backend `/health` |
+| http://localhost:4200/api/info | NestJS via proxy | Backend `/info` |
+| http://localhost:3000/health | NestJS | `{"status":"ok","service":"backend","timestamp":"…"}` |
+| http://localhost:3000/info | NestJS | `{"service":"backend","framework":"NestJS","runtime":"v22.x","timestamp":"…"}` |
 
-## Summary
+## Verify
 
-This project demonstrates:
+```bash
+curl http://localhost:4200/api/health   # must return the backend response
 
-- Independently built Docker images for the frontend and backend.
-- A NestJS backend exposing health and information endpoints.
-- An Angular application served by Nginx.
-- Frontend health and information endpoints implemented in Nginx.
-- Reverse proxying from Nginx to the backend through `/api/`.
-- Docker networking and service-name-based communication.
-- Non-root container execution.
-- Docker Compose orchestration for local development and testing.
+docker inspect --format='{{.Config.User}}' nestjs-backend            # 1001
+docker inspect --format='{{.State.Health.Status}}' angular-frontend  # healthy
+```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Port already in use | Change the host port in `compose.yaml`, e.g. `"4201:8080"` |
+| `/api/*` returns 502 | Backend is down: check `docker compose logs backend` |
+| `host not found in upstream "backend"` | Start the backend first; without Compose, add `--network-alias backend` |
+| Changes not applied | Rebuild: `docker compose up -d --build <service>` |
+
+## Tech Stack
+
+NestJS 11 · Angular 20 · Node.js 22 · Nginx 1.28 · Docker Compose · Alpine Linux
+
+
 ---
 
-# Week 2 — Kubernetes, Helm, Istio & Strict mTLS
+Week2 # NestJS + Angular Microservices — Kubernetes, Helm & Istio mTLS 
 
-In Week 2 the same two services run on a local **Minikube** cluster. They're packaged as a parameterized **Helm chart** in `helm/microservices`, meshed with **Istio** (an automatic sidecar in each pod), and secured with **strict mTLS** between the frontend and the backend.
+Two microservices from Week 1, deployed to a local Kubernetes cluster with a parameterized Helm chart, meshed with **Istio**, and secured with **strict mTLS**.
 
-## Architecture
+| Service | Tech | Container port | Kubernetes Service |
+|---|---|---|---|
+| Backend | NestJS 11 (Node 22) | `3000` | `backend:3000` |
+| Frontend | Angular 20 + Nginx 1.28 | `8080` | `frontend-service:80` |
 
-```text
-Browser ─► kubectl port-forward :4200 ─► frontend-service:80
-                                              │
-                          ┌───────────────────▼───────────────────┐
-                          │ frontend pod: nginx :8080 + istio-proxy│
-                          └───────────────────┬───────────────────┘
-                                              │  /api/*  (mTLS, STRICT)
-                          ┌───────────────────▼───────────────────┐
-                          │ backend pod: NestJS :3000 + istio-proxy│
-                          └───────────────────────────────────────┘
-                          namespace: microservices (istio-injection=enabled)
-
-istiod (namespace istio-system): issues the mTLS certificates and configures the sidecars
-```
-
-## Helm Chart Structure
+Nginx serves the Angular app and proxies `/api/*` to `http://backend:3000`. Both containers run as non-root (UID `1001`).
 
 ```text
-helm/microservices/
-├── Chart.yaml
-├── values.yaml                     # images, ports, replicas, resources, probes, Istio/mTLS
-└── templates/
-    ├── backend-deployment.yaml
-    ├── backend-service.yaml        # Service name "backend" (used by nginx proxy_pass)
-    ├── frontend-deployment.yaml
-    ├── frontend-service.yaml       # frontend-service:80 → container port 8080
-    ├── peer-authentication.yaml    # PeerAuthentication, mode STRICT
-    ├── destination-rule.yaml       # ISTIO_MUTUAL for traffic to the backend
-    └── NOTES.txt
+Browser ─► port-forward :4200 ─► frontend-service ─► [frontend pod: nginx + istio-proxy]
+                                                              │  mTLS (STRICT)
+                                                              ▼
+                                       backend ─► [backend pod: nestjs + istio-proxy]
 ```
 
-### Main values
+## Project Structure
 
-| Key | Default | Description |
-|---|---|---|
-| `backend.image.repository` / `.tag` | `backend-image` / `1.0` | Backend image |
-| `frontend.image.repository` / `.tag` | `frontend-image` / `1.0` | Frontend image |
-| `*.replicaCount` | `1` | Pods per service |
-| `backend.port` / `frontend.port` | `3000` / `8080` | Container ports |
-| `frontend.service.port` | `80` | Frontend Service port |
-| `*.healthCheck.path` | `/health` | Readiness and liveness probes |
-| `istio.enabled` | `true` | Adds the sidecar-injection label to pods |
-| `istio.mtls.mode` | `STRICT` | `STRICT` or `PERMISSIVE` |
+```text
+.
+├── compose.yaml                     # Week 1: run with Docker Compose
+├── services/
+│   ├── backend/                     # NestJS API + Dockerfile
+│   └── frontend/                    # Angular + nginx.conf + Dockerfile
+└── helm/microservices/
+    ├── Chart.yaml
+    ├── values.yaml                  # images, ports, replicas, resources, probes, Istio/mTLS
+    └── templates/
+        ├── backend-deployment.yaml
+        ├── backend-service.yaml
+        ├── frontend-deployment.yaml
+        ├── frontend-service.yaml
+        ├── peer-authentication.yaml # PeerAuthentication: mTLS mode (STRICT)
+        ├── destination-rule.yaml    # ISTIO_MUTUAL for traffic to the backend
+        └── NOTES.txt
+```
 
 ## Prerequisites
 
-- Docker, `kubectl`, `helm` v3, `minikube`, and optionally `istioctl`
-- On Windows: run everything inside **WSL 2 (Ubuntu)** as a normal user, not root, and keep the project in `~`, not `/mnt/c`
-- At least 6 GB of RAM and 3 CPUs available for Minikube (Istio requirement)
+Docker, `kubectl`, `helm` (v3), `minikube`, and optionally `istioctl`.
 
 ## 1. Start Minikube
 
+Istio needs at least 6 GB of RAM and 3 CPUs:
+
 ```bash
-minikube start --driver=docker --memory=6144 --cpus=3
+minikube start --memory=6144 --cpus=3
 kubectl get nodes
 ```
 
-## 2. Build the images inside Minikube
+## 2. Build the images and load them into Minikube
 
 ```bash
-minikube image build -t backend-image:1.0  ./services/backend
-minikube image build -t frontend-image:1.0 ./services/frontend
+docker build -t backend-image:1.0  ./services/backend
+docker build -t frontend-image:1.0 ./services/frontend
+
+minikube image load backend-image:1.0
+minikube image load frontend-image:1.0
 minikube image ls | grep -E "backend-image|frontend-image"
 ```
 
@@ -608,7 +182,8 @@ minikube image ls | grep -E "backend-image|frontend-image"
 helm repo add istio https://istio-release.storage.googleapis.com/charts
 helm repo update
 
-helm install istio-base istio/base -n istio-system --create-namespace --set defaultRevision=default
+kubectl create namespace istio-system
+helm install istio-base istio/base -n istio-system --set defaultRevision=default
 helm install istiod istio/istiod -n istio-system --wait
 
 kubectl get pods -n istio-system
@@ -631,57 +206,36 @@ helm install microservices helm/microservices -n microservices
 kubectl get pods,svc -n microservices
 ```
 
-Each pod must show **`2/2` READY**: the app container plus the `istio-proxy` sidecar.
+Each pod should show **`2/2` READY**: the app container plus the `istio-proxy` sidecar.
 
-## 6. Open the application
+Open the app:
 
 ```bash
 kubectl port-forward -n microservices svc/frontend-service 4200:80
+# http://localhost:4200
 ```
 
-Open **http://localhost:4200**. Both the frontend and the backend cards should show Running/Healthy.
-
-The backend Service is `ClusterIP`, so it isn't exposed outside the cluster. To call it directly:
-
-```bash
-kubectl port-forward -n microservices svc/backend 3000:3000
-curl http://localhost:3000/health
-```
-
-## 7. Strict mTLS
+## 6. Strict mTLS
 
 The chart creates:
 
-- **`PeerAuthentication`** (`mode: STRICT`): pods in the `microservices` namespace accept **only** mTLS traffic.
+- **`PeerAuthentication`** (`mode: STRICT`): pods in the namespace accept only mTLS traffic.
 - **`DestinationRule`** (`ISTIO_MUTUAL`): the frontend's sidecar always calls the backend over mTLS.
 
 ```bash
 kubectl get peerauthentication,destinationrule -n microservices
 ```
 
-Switch modes through Helm values:
+Change the mode through values:
 
 ```bash
 helm upgrade microservices helm/microservices -n microservices --set istio.mtls.mode=PERMISSIVE
 helm upgrade microservices helm/microservices -n microservices --set istio.mtls.mode=STRICT
 ```
 
-### Nginx and Istio
+## 7. Verify mTLS
 
-`nginx.conf` sends the backend's name as the Host header:
-
-```nginx
-location /api/ {
-    proxy_pass http://backend:3000/;
-    proxy_set_header Host backend;
-}
-```
-
-Istio routes HTTP traffic by its Host header. With `Host $host`, the browser's host (`localhost:4200`) would be forwarded instead. Istio wouldn't recognise it, so the request would leave the sidecar unencrypted and strict mTLS would reject it.
-
-## 8. Verify mTLS
-
-**Traffic inside the mesh works** (frontend → backend, encrypted by the sidecars):
+**Inside the mesh it works** (frontend → backend, encrypted by the sidecars):
 
 ```bash
 kubectl exec -n microservices deploy/frontend -c frontend -- wget -qO- http://backend:3000/health
@@ -705,15 +259,19 @@ kubectl exec -n legacy curl -- curl -sS -m 5 http://backend.microservices:3000/h
 istioctl proxy-config secret deploy/backend -n microservices
 ```
 
-## Updating the application
+## Configuration (`values.yaml`)
 
-Rebuild with a new tag and upgrade the release:
-
-```bash
-minikube image build -t frontend-image:1.1 ./services/frontend
-helm upgrade microservices helm/microservices -n microservices --set frontend.image.tag=1.1
-kubectl rollout status deploy/frontend -n microservices
-```
+| Key | Default | Description |
+|---|---|---|
+| `backend.image.repository` / `.tag` | `backend-image` / `1.0` | Backend image |
+| `frontend.image.repository` / `.tag` | `frontend-image` / `1.0` | Frontend image |
+| `*.replicaCount` | `1` | Pods per service |
+| `backend.port` / `frontend.port` | `3000` / `8080` | Container ports |
+| `frontend.service.port` | `80` | Frontend Service port |
+| `*.resources` | 100m / 128Mi request | CPU and memory |
+| `*.healthCheck.path` | `/health` | Readiness and liveness probe path |
+| `istio.enabled` | `true` | Adds the sidecar-injection label to pods |
+| `istio.mtls.mode` | `STRICT` | `STRICT` or `PERMISSIVE` |
 
 ## Clean Up
 
@@ -724,22 +282,14 @@ helm uninstall istiod istio-base -n istio-system
 minikube delete
 ```
 
-## Week 2 Troubleshooting
+## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `ErrImagePull` / `ImagePullBackOff` | The image isn't inside Minikube. Rebuild with `minikube image build` (step 2) and keep `pullPolicy: IfNotPresent` |
-| Pods show `1/1` instead of `2/2` | Label the namespace (step 4), then run `kubectl rollout restart deploy -n microservices` |
+| `ErrImagePull` / `ImagePullBackOff` | The image isn't loaded into Minikube. Re-run step 2 and keep `pullPolicy: IfNotPresent` |
+| Pods `1/1` instead of `2/2` | Label the namespace (step 4), then run `kubectl rollout restart deploy -n microservices` |
 | Frontend `CrashLoopBackOff`: `host not found in upstream "backend"` | The backend Service must be named exactly `backend` |
-| Frontend loads but the backend shows Unavailable | `nginx.conf` must use `proxy_set_header Host backend;` (see step 7) |
 | `no matches for kind "PeerAuthentication"` | Install Istio (step 3) before the chart |
-| `minikube start` fails with `certificate ... signed by unknown authority` | Leftover state from an old cluster: run `minikube delete --all --purge`, remove `~/.minikube`, and start again without `sudo` |
-| Istio pods `Pending` / not enough memory | Start Minikube with `--memory=6144 --cpus=3`. On WSL, raise `memory=` in `%UserProfile%\.wslconfig` and run `wsl --shutdown` |
+| Istio pods `Pending` | Not enough resources: restart Minikube with `--memory=6144 --cpus=3` |
 
-## Week 2 Summary
 
-- A local Kubernetes cluster with Minikube.
-- Kubernetes Deployments and Services for both microservices, with probes, resource limits and non-root pods.
-- A parameterized Helm chart in `helm/microservices`.
-- Istio installed with Helm, with automatic sidecar injection in the `microservices` namespace.
-- Strict mTLS between the frontend and the backend, enforced by `PeerAuthentication` and checked with a client outside the mesh.
