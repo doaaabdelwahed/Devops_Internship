@@ -1,4 +1,4 @@
-Week1 # NestJS + Angular Microservices (Docker)
+# NestJS + Angular Microservices (Docker)
 
 This repository contains two independently built and deployed services:
 
@@ -529,70 +529,76 @@ This project demonstrates:
 - Docker networking and service-name-based communication.
 - Non-root container execution.
 - Docker Compose orchestration for local development and testing.
-
-
 ---
 
-Week2 # NestJS + Angular Microservices — Kubernetes, Helm & Istio mTLS 
+# Week 2 — Kubernetes, Helm, Istio & Strict mTLS
 
-Two microservices from Week 1, deployed to a local Kubernetes cluster with a parameterized Helm chart, meshed with **Istio**, and secured with **strict mTLS**.
+In Week 2 the same two services run on a local **Minikube** cluster. They're packaged as a parameterized **Helm chart** in `helm/microservices`, meshed with **Istio** (an automatic sidecar in each pod), and secured with **strict mTLS** between the frontend and the backend.
 
-| Service | Tech | Container port | Kubernetes Service |
-|---|---|---|---|
-| Backend | NestJS 11 (Node 22) | `3000` | `backend:3000` |
-| Frontend | Angular 20 + Nginx 1.28 | `8080` | `frontend-service:80` |
-
-Nginx serves the Angular app and proxies `/api/*` to `http://backend:3000`. Both containers run as non-root (UID `1001`).
+## Architecture
 
 ```text
-Browser ─► port-forward :4200 ─► frontend-service ─► [frontend pod: nginx + istio-proxy]
-                                                              │  mTLS (STRICT)
-                                                              ▼
-                                       backend ─► [backend pod: nestjs + istio-proxy]
+Browser ─► kubectl port-forward :4200 ─► frontend-service:80
+                                              │
+                          ┌───────────────────▼───────────────────┐
+                          │ frontend pod: nginx :8080 + istio-proxy│
+                          └───────────────────┬───────────────────┘
+                                              │  /api/*  (mTLS, STRICT)
+                          ┌───────────────────▼───────────────────┐
+                          │ backend pod: NestJS :3000 + istio-proxy│
+                          └───────────────────────────────────────┘
+                          namespace: microservices (istio-injection=enabled)
+
+istiod (namespace istio-system): issues the mTLS certificates and configures the sidecars
 ```
 
-## Project Structure
+## Helm Chart Structure
 
 ```text
-.
-├── compose.yaml                     # Week 1: run with Docker Compose
-├── services/
-│   ├── backend/                     # NestJS API + Dockerfile
-│   └── frontend/                    # Angular + nginx.conf + Dockerfile
-└── helm/microservices/
-    ├── Chart.yaml
-    ├── values.yaml                  # images, ports, replicas, resources, probes, Istio/mTLS
-    └── templates/
-        ├── backend-deployment.yaml
-        ├── backend-service.yaml
-        ├── frontend-deployment.yaml
-        ├── frontend-service.yaml
-        ├── peer-authentication.yaml # PeerAuthentication: mTLS mode (STRICT)
-        ├── destination-rule.yaml    # ISTIO_MUTUAL for traffic to the backend
-        └── NOTES.txt
+helm/microservices/
+├── Chart.yaml
+├── values.yaml                     # images, ports, replicas, resources, probes, Istio/mTLS
+└── templates/
+    ├── backend-deployment.yaml
+    ├── backend-service.yaml        # Service name "backend" (used by nginx proxy_pass)
+    ├── frontend-deployment.yaml
+    ├── frontend-service.yaml       # frontend-service:80 → container port 8080
+    ├── peer-authentication.yaml    # PeerAuthentication, mode STRICT
+    ├── destination-rule.yaml       # ISTIO_MUTUAL for traffic to the backend
+    └── NOTES.txt
 ```
+
+### Main values
+
+| Key | Default | Description |
+|---|---|---|
+| `backend.image.repository` / `.tag` | `backend-image` / `1.0` | Backend image |
+| `frontend.image.repository` / `.tag` | `frontend-image` / `1.0` | Frontend image |
+| `*.replicaCount` | `1` | Pods per service |
+| `backend.port` / `frontend.port` | `3000` / `8080` | Container ports |
+| `frontend.service.port` | `80` | Frontend Service port |
+| `*.healthCheck.path` | `/health` | Readiness and liveness probes |
+| `istio.enabled` | `true` | Adds the sidecar-injection label to pods |
+| `istio.mtls.mode` | `STRICT` | `STRICT` or `PERMISSIVE` |
 
 ## Prerequisites
 
-Docker, `kubectl`, `helm` (v3), `minikube`, and optionally `istioctl`.
+- Docker, `kubectl`, `helm` v3, `minikube`, and optionally `istioctl`
+- On Windows: run everything inside **WSL 2 (Ubuntu)** as a normal user, not root, and keep the project in `~`, not `/mnt/c`
+- At least 6 GB of RAM and 3 CPUs available for Minikube (Istio requirement)
 
 ## 1. Start Minikube
 
-Istio needs at least 6 GB of RAM and 3 CPUs:
-
 ```bash
-minikube start --memory=6144 --cpus=3
+minikube start --driver=docker --memory=6144 --cpus=3
 kubectl get nodes
 ```
 
-## 2. Build the images and load them into Minikube
+## 2. Build the images inside Minikube
 
 ```bash
-docker build -t backend-image:1.0  ./services/backend
-docker build -t frontend-image:1.0 ./services/frontend
-
-minikube image load backend-image:1.0
-minikube image load frontend-image:1.0
+minikube image build -t backend-image:1.0  ./services/backend
+minikube image build -t frontend-image:1.0 ./services/frontend
 minikube image ls | grep -E "backend-image|frontend-image"
 ```
 
@@ -602,8 +608,7 @@ minikube image ls | grep -E "backend-image|frontend-image"
 helm repo add istio https://istio-release.storage.googleapis.com/charts
 helm repo update
 
-kubectl create namespace istio-system
-helm install istio-base istio/base -n istio-system --set defaultRevision=default
+helm install istio-base istio/base -n istio-system --create-namespace --set defaultRevision=default
 helm install istiod istio/istiod -n istio-system --wait
 
 kubectl get pods -n istio-system
@@ -626,36 +631,57 @@ helm install microservices helm/microservices -n microservices
 kubectl get pods,svc -n microservices
 ```
 
-Each pod should show **`2/2` READY**: the app container plus the `istio-proxy` sidecar.
+Each pod must show **`2/2` READY**: the app container plus the `istio-proxy` sidecar.
 
-Open the app:
+## 6. Open the application
 
 ```bash
 kubectl port-forward -n microservices svc/frontend-service 4200:80
-# http://localhost:4200
 ```
 
-## 6. Strict mTLS
+Open **http://localhost:4200**. Both the frontend and the backend cards should show Running/Healthy.
+
+The backend Service is `ClusterIP`, so it isn't exposed outside the cluster. To call it directly:
+
+```bash
+kubectl port-forward -n microservices svc/backend 3000:3000
+curl http://localhost:3000/health
+```
+
+## 7. Strict mTLS
 
 The chart creates:
 
-- **`PeerAuthentication`** (`mode: STRICT`): pods in the namespace accept only mTLS traffic.
+- **`PeerAuthentication`** (`mode: STRICT`): pods in the `microservices` namespace accept **only** mTLS traffic.
 - **`DestinationRule`** (`ISTIO_MUTUAL`): the frontend's sidecar always calls the backend over mTLS.
 
 ```bash
 kubectl get peerauthentication,destinationrule -n microservices
 ```
 
-Change the mode through values:
+Switch modes through Helm values:
 
 ```bash
 helm upgrade microservices helm/microservices -n microservices --set istio.mtls.mode=PERMISSIVE
 helm upgrade microservices helm/microservices -n microservices --set istio.mtls.mode=STRICT
 ```
 
-## 7. Verify mTLS
+### Nginx and Istio
 
-**Inside the mesh it works** (frontend → backend, encrypted by the sidecars):
+`nginx.conf` sends the backend's name as the Host header:
+
+```nginx
+location /api/ {
+    proxy_pass http://backend:3000/;
+    proxy_set_header Host backend;
+}
+```
+
+Istio routes HTTP traffic by its Host header. With `Host $host`, the browser's host (`localhost:4200`) would be forwarded instead. Istio wouldn't recognise it, so the request would leave the sidecar unencrypted and strict mTLS would reject it.
+
+## 8. Verify mTLS
+
+**Traffic inside the mesh works** (frontend → backend, encrypted by the sidecars):
 
 ```bash
 kubectl exec -n microservices deploy/frontend -c frontend -- wget -qO- http://backend:3000/health
@@ -679,19 +705,15 @@ kubectl exec -n legacy curl -- curl -sS -m 5 http://backend.microservices:3000/h
 istioctl proxy-config secret deploy/backend -n microservices
 ```
 
-## Configuration (`values.yaml`)
+## Updating the application
 
-| Key | Default | Description |
-|---|---|---|
-| `backend.image.repository` / `.tag` | `backend-image` / `1.0` | Backend image |
-| `frontend.image.repository` / `.tag` | `frontend-image` / `1.0` | Frontend image |
-| `*.replicaCount` | `1` | Pods per service |
-| `backend.port` / `frontend.port` | `3000` / `8080` | Container ports |
-| `frontend.service.port` | `80` | Frontend Service port |
-| `*.resources` | 100m / 128Mi request | CPU and memory |
-| `*.healthCheck.path` | `/health` | Readiness and liveness probe path |
-| `istio.enabled` | `true` | Adds the sidecar-injection label to pods |
-| `istio.mtls.mode` | `STRICT` | `STRICT` or `PERMISSIVE` |
+Rebuild with a new tag and upgrade the release:
+
+```bash
+minikube image build -t frontend-image:1.1 ./services/frontend
+helm upgrade microservices helm/microservices -n microservices --set frontend.image.tag=1.1
+kubectl rollout status deploy/frontend -n microservices
+```
 
 ## Clean Up
 
@@ -702,23 +724,22 @@ helm uninstall istiod istio-base -n istio-system
 minikube delete
 ```
 
-## Troubleshooting
+## Week 2 Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `ErrImagePull` / `ImagePullBackOff` | The image isn't loaded into Minikube. Re-run step 2 and keep `pullPolicy: IfNotPresent` |
-| Pods `1/1` instead of `2/2` | Label the namespace (step 4), then run `kubectl rollout restart deploy -n microservices` |
+| `ErrImagePull` / `ImagePullBackOff` | The image isn't inside Minikube. Rebuild with `minikube image build` (step 2) and keep `pullPolicy: IfNotPresent` |
+| Pods show `1/1` instead of `2/2` | Label the namespace (step 4), then run `kubectl rollout restart deploy -n microservices` |
 | Frontend `CrashLoopBackOff`: `host not found in upstream "backend"` | The backend Service must be named exactly `backend` |
+| Frontend loads but the backend shows Unavailable | `nginx.conf` must use `proxy_set_header Host backend;` (see step 7) |
 | `no matches for kind "PeerAuthentication"` | Install Istio (step 3) before the chart |
-| Istio pods `Pending` | Not enough resources: restart Minikube with `--memory=6144 --cpus=3` |
+| `minikube start` fails with `certificate ... signed by unknown authority` | Leftover state from an old cluster: run `minikube delete --all --purge`, remove `~/.minikube`, and start again without `sudo` |
+| Istio pods `Pending` / not enough memory | Start Minikube with `--memory=6144 --cpus=3`. On WSL, raise `memory=` in `%UserProfile%\.wslconfig` and run `wsl --shutdown` |
 
-## Run with Docker Compose (Week 1)
+## Week 2 Summary
 
-```bash
-docker compose up -d --build   # http://localhost:4200
-docker compose down
-```
-
-
-
-
+- A local Kubernetes cluster with Minikube.
+- Kubernetes Deployments and Services for both microservices, with probes, resource limits and non-root pods.
+- A parameterized Helm chart in `helm/microservices`.
+- Istio installed with Helm, with automatic sidecar injection in the `microservices` namespace.
+- Strict mTLS between the frontend and the backend, enforced by `PeerAuthentication` and checked with a client outside the mesh.
