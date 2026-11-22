@@ -1,0 +1,6 @@
+apiVersion: v2
+name: microservices
+description: NestJS backend + Angular/Nginx frontend with Istio sidecars and strict mTLS
+type: application
+version: 0.1.0
+appVersion: "1.0"

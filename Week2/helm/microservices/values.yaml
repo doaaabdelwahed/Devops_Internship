@@ -1,0 +1,54 @@
+# Both images already run as UID 1001 (USER in the Dockerfiles); enforced here too
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+
+# Frontend: Angular served by Nginx (Nginx listens on 8080 inside the container)
+frontend:
+  replicaCount: 1
+  image:
+    repository: frontend-image
+    tag: "1.0"
+    pullPolicy: IfNotPresent      # image is loaded into Minikube, never pulled
+  port: 8080
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  healthCheck:
+    path: /health
+
+# Backend: NestJS API (Service name must stay "backend": nginx.conf proxies to http://backend:3000)
+backend:
+  replicaCount: 1
+  image:
+    repository: backend-image
+    tag: "1.0"
+    pullPolicy: IfNotPresent
+  port: 3000
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  healthCheck:
+    path: /health
+
+# Istio
+istio:
+  enabled: true          # adds sidecar.istio.io/inject label to the pods
+  mtls:
+    enabled: true
+    mode: STRICT         # STRICT | PERMISSIVE
