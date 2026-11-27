@@ -1,0 +1,51 @@
+{{- if .Values.kong.enabled }}
+# Public route: the Angular UI
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    konghq.com/strip-path: "false"
+    konghq.com/preserve-host: "false"   # send Host=frontend-service so Istio routes it over mTLS
+spec:
+  ingressClassName: {{ .Values.kong.ingressClassName }}
+  rules:
+    - http:
+        paths:
+          - path: {{ .Values.kong.frontend.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: {{ .Values.frontend.service.port }}
+---
+# Protected route: /api/* -> backend (/api prefix stripped, e.g. /api/health -> /health)
+{{- $plugins := list }}
+{{- if .Values.kong.api.rateLimit.enabled }}{{- $plugins = append $plugins "api-rate-limit" }}{{- end }}
+{{- if .Values.kong.api.keyAuth.enabled }}{{- $plugins = append $plugins "api-key-auth" }}{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-api
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    konghq.com/strip-path: "true"
+    konghq.com/preserve-host: "false"
+    {{- if $plugins }}
+    konghq.com/plugins: {{ join "," $plugins | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.kong.ingressClassName }}
+  rules:
+    - http:
+        paths:
+          - path: {{ .Values.kong.api.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: {{ .Values.backend.service.port }}
+{{- end }}

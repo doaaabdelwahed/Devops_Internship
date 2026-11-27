@@ -1,0 +1,112 @@
+name: CI - lint, test, build & push images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Week3/services/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "Week3/services/**"
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  SERVICES_DIR: Week3/services
+
+jobs:
+  lint-test:
+    name: Lint & test (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend]
+    defaults:
+      run:
+        working-directory: ${{ env.SERVICES_DIR }}/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ env.SERVICES_DIR }}/${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (backend)
+        if: matrix.service == 'backend'
+        run: npm test -- --ci
+
+      - name: Type-check (frontend)
+        if: matrix.service == 'frontend'
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  build-push:
+    name: Build & push image (${{ matrix.service }})
+    needs: lint-test
+    # Only publish images for pushes to master (not for pull requests)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase image owner (GHCR names must be lowercase)
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagging strategy:
+      #   sha-<7 chars>  -> short commit SHA (use this to deploy)
+      #   <40 chars>     -> full commit SHA (exact traceability)
+      #   latest         -> moving tag, only on the default branch
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/devops-internship-${{ matrix.service }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=sha,prefix=,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.SERVICES_DIR }}/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Summary
+        run: |
+          echo "### ${{ matrix.service }} image pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

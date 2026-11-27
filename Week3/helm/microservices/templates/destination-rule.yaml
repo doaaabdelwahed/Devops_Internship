@@ -1,0 +1,13 @@
+{{- if and .Values.istio.enabled .Values.istio.mtls.enabled }}
+# Callers (the frontend sidecar) always use Istio mTLS to reach the backend
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: backend
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: backend.{{ .Release.Namespace }}.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+{{- end }}

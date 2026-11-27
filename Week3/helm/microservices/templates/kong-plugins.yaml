@@ -1,0 +1,26 @@
+{{- if .Values.kong.enabled }}
+{{- if .Values.kong.api.rateLimit.enabled }}
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: api-rate-limit
+  namespace: {{ .Release.Namespace }}
+plugin: rate-limiting
+config:
+  minute: {{ .Values.kong.api.rateLimit.minute }}
+  policy: {{ .Values.kong.api.rateLimit.policy }}
+---
+{{- end }}
+{{- if .Values.kong.api.keyAuth.enabled }}
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: api-key-auth
+  namespace: {{ .Release.Namespace }}
+plugin: key-auth
+config:
+  key_names:
+    {{- toYaml .Values.kong.api.keyAuth.keyNames | nindent 4 }}
+  hide_credentials: true
+{{- end }}
+{{- end }}

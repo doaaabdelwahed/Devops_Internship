@@ -1,0 +1,22 @@
+# API consumer + its key. Kept outside the Helm chart so the key isn't stored in values.yaml.
+# Change the key before using it anywhere real.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: intern-apikey
+  namespace: microservices
+  labels:
+    konghq.com/credential: key-auth
+stringData:
+  key: my-secret-key-123
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: intern-user
+  namespace: microservices
+  annotations:
+    kubernetes.io/ingress.class: kong
+username: intern-user
+credentials:
+  - intern-apikey

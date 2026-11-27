@@ -1,0 +1,8 @@
+Installed {{ .Chart.Name }} in namespace "{{ .Release.Namespace }}" (mTLS: {{ if .Values.istio.mtls.enabled }}{{ .Values.istio.mtls.mode }}{{ else }}off{{ end }}).
+
+Pods should show 2/2 READY (app + istio-proxy):
+  kubectl get pods -n {{ .Release.Namespace }}
+
+Open the app:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/frontend-service 4200:{{ .Values.frontend.service.port }}
+  http://localhost:4200
